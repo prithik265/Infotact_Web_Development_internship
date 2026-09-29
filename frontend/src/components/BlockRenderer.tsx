@@ -6,7 +6,13 @@ interface Props {
   node: ASTNode;
   activeNodeId: string | null;
   remoteNodeId?: string;
-  onTextChange: (node: ASTNode, value: string) => void;
+
+  onTextChange: (
+    node: ASTNode,
+    previousValue: string,
+    value: string
+  ) => void;
+
   onFocus: (node: ASTNode) => void;
   onDelete: (node: ASTNode) => void;
   editable?: boolean;
@@ -14,7 +20,12 @@ interface Props {
 
 interface EditableTextProps {
   value: string;
-  onChange: (value: string) => void;
+
+  onChange: (
+    previousValue: string,
+    value: string
+  ) => void;
+
   onFocus: () => void;
   placeholder: string;
   disabled: boolean;
@@ -31,14 +42,26 @@ function EditableText({
   className,
   multiline = false
 }: EditableTextProps) {
+  /*
+   * `draft` represents what THIS USER currently sees
+   * inside the input.
+   *
+   * This is intentionally separate from the shared AST value.
+   * Otherwise, a remote Yjs update could reset the input while
+   * the user is typing.
+   */
   const [draft, setDraft] = useState(value);
 
   const inputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
-    // Do not replace a user's in-progress local input when a remote Yjs
-    // update arrives. When the field is not focused, mirror the shared value.
+    /*
+     * If the user is not currently typing in this field,
+     * synchronize the local draft with the latest shared value.
+     *
+     * If the field is focused, preserve the user's local draft.
+     */
     const active = document.activeElement;
 
     if (
@@ -50,12 +73,28 @@ function EditableText({
   }, [value]);
 
   const handleChange = (
-    event: ChangeEvent<HTMLInputElement | HTMLTextAreaElement>
+    event: ChangeEvent<
+      HTMLInputElement | HTMLTextAreaElement
+    >
   ) => {
+    /*
+     * IMPORTANT:
+     *
+     * We send BOTH values:
+     *
+     * previous = what this user was editing
+     * next     = what this user just typed
+     *
+     * This lets the collaboration layer calculate the
+     * actual local operation instead of treating the entire
+     * field as a replacement.
+     */
+    const previous = draft;
     const next = event.target.value;
 
     setDraft(next);
-    onChange(next);
+
+    onChange(previous, next);
   };
 
   if (multiline) {
@@ -87,11 +126,11 @@ function EditableText({
 }
 
 /**
- * Returns editable text only for nodes that actually contain content.
+ * Returns editable text only for nodes that actually
+ * contain text content.
  *
- * Some AST nodes such as lists, list items and dividers do not have
- * a `content` object. Optional chaining prevents the renderer from
- * crashing when those nodes are encountered.
+ * Structural AST nodes such as lists, list items and
+ * dividers may not have a content object.
  */
 function editableText(node: ASTNode): string {
   return typeof node.content?.text === "string"
@@ -109,9 +148,12 @@ export function BlockRenderer({
   editable = true
 }: Props) {
   /*
-   * Document is the root AST node.
-   * It does not render editable content itself; it simply renders
-   * its children recursively.
+   * =========================
+   * DOCUMENT ROOT
+   * =========================
+   *
+   * The document node itself is not editable.
+   * It recursively renders its children.
    */
   if (node.type === "document") {
     return (
@@ -152,10 +194,6 @@ export function BlockRenderer({
     </div>
   );
 
-  /*
-   * Safe for structural nodes because editableText() now handles
-   * missing content.
-   */
   const value = editableText(node);
 
   /*
@@ -164,7 +202,9 @@ export function BlockRenderer({
    * =========================
    */
   if (node.type === "heading") {
-    const level = Number(node.attributes?.level || 1);
+    const level = Number(
+      node.attributes?.level || 1
+    );
 
     return (
       <div className="block-shell">
@@ -173,7 +213,13 @@ export function BlockRenderer({
         <EditableText
           value={value}
           onFocus={() => onFocus(node)}
-          onChange={(next) => onTextChange(node, next)}
+          onChange={(previous, next) =>
+            onTextChange(
+              node,
+              previous,
+              next
+            )
+          }
           placeholder="Heading"
           disabled={!editable}
           className={`${className} heading-input h${Math.min(
@@ -198,7 +244,13 @@ export function BlockRenderer({
         <EditableText
           value={value}
           onFocus={() => onFocus(node)}
-          onChange={(next) => onTextChange(node, next)}
+          onChange={(previous, next) =>
+            onTextChange(
+              node,
+              previous,
+              next
+            )
+          }
           placeholder="Start writing..."
           disabled={!editable}
           className={`${className} paragraph-input`}
@@ -218,15 +270,26 @@ export function BlockRenderer({
       <div className="block-shell">
         {controls}
 
-        <div className={`${className} code-block`}>
+        <div
+          className={`${className} code-block`}
+        >
           <div className="code-label">
-            {String(node.attributes?.language || "text")}
+            {String(
+              node.attributes?.language ||
+                "text"
+            )}
           </div>
 
           <EditableText
             value={value}
             onFocus={() => onFocus(node)}
-            onChange={(next) => onTextChange(node, next)}
+            onChange={(previous, next) =>
+              onTextChange(
+                node,
+                previous,
+                next
+              )
+            }
             placeholder="Write code..."
             disabled={!editable}
             className=""
@@ -241,9 +304,6 @@ export function BlockRenderer({
    * =========================
    * QUOTE
    * =========================
-   *
-   * Quote itself does not need text content.
-   * Its children contain the actual blocks.
    */
   if (node.type === "quote") {
     return (
@@ -272,15 +332,15 @@ export function BlockRenderer({
    * =========================
    * BULLET / ORDERED LIST
    * =========================
-   *
-   * Lists have children but normally do not have content.text.
    */
   if (
     node.type === "bulletList" ||
     node.type === "orderedList"
   ) {
     const ListTag =
-      node.type === "bulletList" ? "ul" : "ol";
+      node.type === "bulletList"
+        ? "ul"
+        : "ol";
 
     return (
       <div className="block-shell">
@@ -308,8 +368,6 @@ export function BlockRenderer({
    * =========================
    * LIST ITEM
    * =========================
-   *
-   * ListItem contains child blocks, usually a paragraph.
    */
   if (node.type === "listItem") {
     return (
@@ -334,8 +392,6 @@ export function BlockRenderer({
    * =========================
    * DIVIDER
    * =========================
-   *
-   * Divider has neither content nor children.
    */
   if (node.type === "divider") {
     return (

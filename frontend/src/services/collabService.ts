@@ -30,7 +30,9 @@ export function connectCollaboration(
 
   const handleUpdate = (update: Uint8Array, origin: unknown) => {
     if (origin === "remote" || origin === "bootstrap") return;
-    if (socket.readyState === WebSocket.OPEN) socket.send(update);
+    if (socket.readyState === WebSocket.OPEN) {
+  socket.send(update.buffer as ArrayBuffer);
+}
   };
   doc.on("update", handleUpdate);
 
